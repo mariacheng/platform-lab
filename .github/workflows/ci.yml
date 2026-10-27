@@ -27,6 +27,30 @@ jobs:
       id-token: write
       contents: read
     steps:
+      - name: Check repository variables
+        env:
+          ROLE: ${{ vars.LAB_CI_ROLE_ARN }}
+          BUCKET: ${{ vars.LAB_ARTIFACTS_BUCKET }}
+        run: |
+          missing=0
+          if [ -z "$ROLE" ]; then
+            echo "::error::LAB_CI_ROLE_ARN is empty. Add it under Settings > Secrets and variables > Actions > Variables tab (not Secrets, not an Environment)."
+            missing=1
+          fi
+          if [ -z "$BUCKET" ]; then
+            echo "::error::LAB_ARTIFACTS_BUCKET is empty. Add it on the same Variables tab."
+            missing=1
+          fi
+          if [ -z "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
+            echo "::error::No OIDC token available. The deploy job needs 'permissions: id-token: write'."
+            missing=1
+          fi
+          exit $missing
+      - name: Show what the OIDC token claims
+        run: |
+          TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
+          echo "$TOKEN" | cut -d. -f2 | python3 -c "import sys,base64,json; p=sys.stdin.read().strip(); p+='='*(-len(p)%4); c=json.loads(base64.urlsafe_b64decode(p)); [print(f'{k}: {c.get(k)}') for k in ('iss','aud','sub')]"
       - name: Prove OIDC deploy (no stored keys)
         uses: aws-actions/configure-aws-credentials@v6.3.0
         with:
