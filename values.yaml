@@ -1,0 +1,20 @@
+dagster-user-deployments:
+  enabled: true
+  deployments:
+    - name: lab
+      image:
+        repository: platform-lab
+        tag: dev
+        pullPolicy: IfNotPresent
+      dagsterApiGrpcArgs: ["-f", "/app/lab_defs.py"]
+      port: 3030
+      includeConfigInLaunchedRuns:
+        enabled: true
+runLauncher:
+  type: K8sRunLauncher
+  config:
+    k8sRunLauncher:
+      imagePullPolicy: IfNotPresent
+      envVars: ["LAB_ON_K8S=true"]
+postgresql:
+  enabled: true

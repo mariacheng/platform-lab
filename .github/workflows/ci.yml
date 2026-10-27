@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Test
+        run: >
+          uv run --no-project --python 3.13 --with dagster==1.13.26 --with polars
+          --with xgboost --with scikit-learn --with pytest pytest -q
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Prove OIDC deploy (no stored keys)
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ vars.LAB_CI_ROLE_ARN }}
+          role-session-name: platform-lab-${{ github.run_id }}
+          aws-region: us-east-1
+      - run: aws sts get-caller-identity
+      - run: |
+          echo "deployed ${{ github.sha }}" > release.txt
+          aws s3 cp release.txt "s3://${{ vars.LAB_ARTIFACTS_BUCKET }}/releases/${{ github.sha }}.txt"
