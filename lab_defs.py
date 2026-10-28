@@ -35,7 +35,10 @@ def candidates():
         yield dg.DynamicOutput(params, mapping_key=f"c{index}")
 
 
-@dg.op
+# Reserve one CPU per candidate pod. The tag is ignored when running locally.
+@dg.op(tags={"dagster-k8s/config": {"container_config": {"resources": {
+    "requests": {"cpu": "1"}, "limits": {"memory": "1Gi"}}}}}
+)
 def evaluate(context: dg.OpExecutionContext, params: dict) -> dict:
     """Cross-validate one candidate and return its PR-AUC."""
     from sklearn.datasets import load_breast_cancer
@@ -43,7 +46,8 @@ def evaluate(context: dg.OpExecutionContext, params: dict) -> dict:
     from xgboost import XGBClassifier
 
     features, labels = load_breast_cancer(return_X_y=True)
-    model = XGBClassifier(n_estimators=200, **params)
+    # A pod sees every host CPU, so without n_jobs XGBoost starts one thread per host CPU in every pod.
+    model = XGBClassifier(n_estimators=200, n_jobs=1, **params)
     score = cross_val_score(model, features, labels, cv=5, scoring="average_precision").mean()
     context.log.info(f"{params} pr_auc={score:.4f} pod={os.getenv('HOSTNAME', 'local')}")
     return {**params, "pr_auc": float(score)}
@@ -65,10 +69,21 @@ def _executor():
     return dg.multiprocess_executor
 
 
+def _resources():
+    """On k8s every step is its own pod, so outputs must go to shared storage (S3), not local disk."""
+    if os.getenv("LAB_ON_K8S") == "true":
+        from dagster_aws.s3 import S3PickleIOManager, S3Resource
+
+        # LAB_S3_ENDPOINT points at the in-cluster S3 server on kind; leave it unset on real AWS.
+        s3 = S3Resource(endpoint_url=os.getenv("LAB_S3_ENDPOINT"))
+        return {"io_manager": S3PickleIOManager(s3_resource=s3, s3_bucket=os.environ["LAB_S3_BUCKET"], s3_prefix="lab")}
+    return {}
+
+
 @dg.job(executor_def=_executor())
 def sweep():
     """Fan out one evaluate step per candidate, then fan in to pick the best."""
     pick_best(candidates().map(evaluate).collect())
 
 
-defs = dg.Definitions(assets=[sales_features], jobs=[sweep])
+defs = dg.Definitions(assets=[sales_features], jobs=[sweep], resources=_resources())

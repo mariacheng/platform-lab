@@ -1,0 +1,21 @@
+image: ghcr.io/astral-sh/uv:0.12.15-python3.13-trixie-slim
+
+pipelines:
+  pull-requests:
+    "**":
+      - step:
+          name: Test
+          script:
+            - uv run --no-project --with dagster==1.13.26 --with polars --with xgboost --with scikit-learn --with pytest pytest -q
+  branches:
+    main:
+      - step:
+          name: Prove OIDC deploy (no stored keys)
+          oidc: true
+          script:
+            - apt-get update -qq && apt-get install -y -qq awscli > /dev/null
+            - export AWS_ROLE_ARN=$LAB_CI_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE=$(pwd)/web-identity-token
+            - echo $BITBUCKET_STEP_OIDC_TOKEN > $AWS_WEB_IDENTITY_TOKEN_FILE
+            - aws sts get-caller-identity
+            - echo "deployed $BITBUCKET_COMMIT" > release.txt
+            - aws s3 cp release.txt s3://$LAB_ARTIFACTS_BUCKET/releases/$BITBUCKET_COMMIT.txt

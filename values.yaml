@@ -10,6 +10,15 @@ dagster-user-deployments:
       port: 3030
       includeConfigInLaunchedRuns:
         enabled: true
+      env:
+        - name: LAB_S3_ENDPOINT
+          value: http://s3:8333
+        - name: LAB_S3_BUCKET
+          value: dagster
+        - name: AWS_REGION
+          value: us-east-1
+      envSecrets:
+        - name: lab-s3
 runLauncher:
   type: K8sRunLauncher
   config:

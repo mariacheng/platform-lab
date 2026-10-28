@@ -1,0 +1,89 @@
+# In-cluster S3 for kind: SeaweedFS stands in for the real S3 bucket so step pods can share outputs.
+# Data lives in an emptyDir, so it is lost when the pod restarts. That is fine for a lab.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: lab-s3
+stringData:
+  AWS_ACCESS_KEY_ID: lab
+  AWS_SECRET_ACCESS_KEY: lab-secret-key
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: lab-s3-identities
+stringData:
+  s3.json: |
+    {"identities": [{"name": "lab",
+      "credentials": [{"accessKey": "lab", "secretKey": "lab-secret-key"}],
+      "actions": ["Admin", "Read", "Write", "List", "Tagging"]}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: s3
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: s3}
+  template:
+    metadata:
+      labels: {app: s3}
+    spec:
+      # The Service is named s3, so k8s would inject S3_PORT=tcp://..., which SeaweedFS reads as its -s3.port flag.
+      enableServiceLinks: false
+      containers:
+        - name: seaweedfs
+          image: chrislusf/seaweedfs:3.97
+          args: ["server", "-dir=/data", "-s3", "-s3.config=/etc/seaweedfs/s3.json"]
+          ports:
+            - containerPort: 8333
+          readinessProbe:
+            tcpSocket: {port: 8333}
+            periodSeconds: 5
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: identities, mountPath: /etc/seaweedfs, readOnly: true}
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: identities
+          secret: {secretName: lab-s3-identities}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: s3
+spec:
+  selector: {app: s3}
+  ports:
+    - port: 8333
+      targetPort: 8333
+---
+# Creates the bucket once S3 is up. Uses the lab image because it already has boto3.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: s3-create-bucket
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: create-bucket
+          image: platform-lab:dev
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef: {name: lab-s3}
+          env:
+            - {name: AWS_REGION, value: us-east-1}
+          command:
+            - python
+            - -c
+            - |
+              import boto3
+              s3 = boto3.client("s3", endpoint_url="http://s3:8333")
+              if "dagster" not in [b["Name"] for b in s3.list_buckets()["Buckets"]]:
+                  s3.create_bucket(Bucket="dagster")
+              print("bucket ready")
